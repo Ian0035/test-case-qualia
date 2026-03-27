@@ -10,8 +10,7 @@
     variant_count: 1,
     seed: 7,
     max_videos: 1,
-    skip_upload: false,
-    overwrite_output: true
+    skip_upload: false
   };
 
   const fallbackRecipes = [
@@ -82,8 +81,7 @@
       form = {
         ...form,
         ...data.defaults,
-        recipes: data.defaults.recipes?.length ? [data.defaults.recipes[0]] : ['balanced'],
-        overwrite_output: true
+        recipes: data.defaults.recipes?.length ? [data.defaults.recipes[0]] : ['balanced']
       };
     } catch (error) {
       loadError = error.message;

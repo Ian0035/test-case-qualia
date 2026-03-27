@@ -28,6 +28,7 @@ ProgressCallback = Callable[[dict[str, object]], None]
 
 @dataclass(frozen=True, slots=True)
 class RunConfig:
+    # Shared configuration model used by both the CLI and the web API.
     source: str
     output_repo_id: str | None = None
     output_dataset_name: str | None = None
@@ -48,6 +49,7 @@ class RunConfig:
 
 @dataclass(frozen=True, slots=True)
 class VariantRunResult:
+    # Final output for one generated dataset variant.
     label: str
     recipe_name: str
     recipe_label: str
@@ -62,6 +64,8 @@ class VariantRunResult:
 
 @dataclass(frozen=True, slots=True)
 class RunResult:
+    # Aggregate result for the whole run. Single-variant runs also populate the top-level
+    # output fields for convenience and backward compatibility.
     output_dir: Path | None
     resolved_repo_id: str | None
     visualizer_url: str | None
@@ -73,6 +77,7 @@ class RunResult:
 
 @dataclass(frozen=True, slots=True)
 class _VariantPlan:
+    # Internal plan object describing one recipe/seed/output combination to execute.
     recipe_name: str
     recipe_label: str
     variant_index: int
@@ -87,6 +92,9 @@ def default_output_dir(source_or_repo_id: str) -> Path:
 
 
 def run_augmentation(config: RunConfig, progress: ProgressCallback | None = None) -> RunResult:
+    # Top-level orchestration entrypoint used by both the CLI and the web app.
+    # It validates the config, expands any requested variants, and runs each planned
+    # dataset output from clone -> rewrite videos -> upload.
     recipes = tuple(config.recipes or ("balanced",))
     if config.max_videos is not None and config.max_videos < 1:
         raise ValueError("--max-videos must be at least 1.")
@@ -126,6 +134,8 @@ def run_augmentation(config: RunConfig, progress: ProgressCallback | None = None
 
     results: list[VariantRunResult] = []
     for plan_index, plan in enumerate(plans, start=1):
+        # Each plan becomes a fully materialized dataset output with its own local directory,
+        # repo name suffix, seed, upload, and visualizer link.
         _emit(
             progress,
             phase="variant_started",
@@ -177,6 +187,7 @@ def _run_single_variant(
     variant_position: int,
     total_variants: int,
 ) -> VariantRunResult:
+    # Execute one concrete dataset variant end to end.
     preset = get_preset(preset_name)
     recipe = get_recipe(plan.recipe_name)
     output_dataset_name = _suffix_dataset_name(config.output_dataset_name, plan.suffix)
@@ -213,6 +224,7 @@ def _run_single_variant(
     if not video_files:
         raise RuntimeError(f"No MP4 files were found under {output_dir / 'videos'}")
     if config.max_videos is not None:
+        # Smoke-test mode: keep the dataset structure intact, but only rewrite the first N videos.
         video_files = video_files[: config.max_videos]
         _emit(
             progress,
@@ -298,6 +310,8 @@ def _run_single_variant(
 
     visualizer_url = None
     if config.skip_upload:
+        # Local-only runs still expose a visualizer URL shape when a repo id can be resolved,
+        # which keeps the result contract consistent across modes.
         if resolved_repo_id:
             visualizer_url = build_visualizer_url(resolved_repo_id, episode_index=config.episode_index)
         _emit(
@@ -353,6 +367,7 @@ def _run_single_variant(
 
 
 def _build_variant_plans(recipes: tuple[str, ...], variant_count: int, seed: int) -> list[_VariantPlan]:
+    # Expand the user's requested recipes and variant count into concrete execution units.
     plans: list[_VariantPlan] = []
     sequence = 0
     single_run = len(recipes) == 1 and variant_count == 1
@@ -395,6 +410,8 @@ def _suffix_repo_id(repo_id: str | None, suffix: str) -> str | None:
 
 
 def _resolve_variant_output_dir(config: RunConfig, source_or_repo_id: str, suffix: str) -> Path:
+    # Single-output runs keep the familiar artifact path; multi-output runs fan out into
+    # suffixed directories so each generated dataset remains isolated on disk.
     if config.output_dir is not None:
         if config.variant_count == 1 and len(config.recipes) == 1:
             return config.output_dir.resolve()
@@ -424,5 +441,6 @@ def _serialize_variant_results(results: list[VariantRunResult]) -> list[dict[str
 
 
 def _emit(progress: ProgressCallback | None, **event: object) -> None:
+    # Thin helper that keeps the orchestration layer decoupled from any specific UI.
     if progress is not None:
         progress(event)

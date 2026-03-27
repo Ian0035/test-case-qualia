@@ -17,6 +17,7 @@ from qualia_lerobot_augmentor.config import list_recipes
 from qualia_lerobot_augmentor.service import RunConfig, RunResult, run_augmentation
 
 
+# Request payload accepted from the frontend when a user starts a new run.
 class RunCreateRequest(BaseModel):
     source: str = Field(default="lerobot/aloha_static_cups_open")
     output_repo_id: str | None = None
@@ -38,6 +39,7 @@ class RunCreateRequest(BaseModel):
 
 @dataclass(slots=True)
 class JobState:
+    # In-memory representation of a single UI run, including live progress and final output.
     job_id: str
     created_at: str
     config: dict[str, Any]
@@ -79,11 +81,15 @@ class JobState:
 
 
 class JobManager:
+    # Small in-memory job coordinator used by the local web app.
+    # It owns job state, runs work in background threads, and translates pipeline progress
+    # events into the shape expected by the frontend.
     def __init__(self) -> None:
         self._jobs: dict[str, JobState] = {}
         self._lock = Lock()
 
     def create_job(self, request: RunCreateRequest) -> JobState:
+        # The API returns immediately while the real augmentation work continues in a daemon thread.
         job = JobState(
             job_id=str(uuid4()),
             created_at=_timestamp(),
@@ -107,6 +113,7 @@ class JobManager:
             return None if job is None else job.to_dict()
 
     def _run_job(self, job_id: str, request: RunCreateRequest) -> None:
+        # The shared service layer does the heavy lifting for both CLI and web flows.
         self._update(job_id, status="running", phase="starting", message="Starting run...", started_at=_timestamp())
         try:
             result = run_augmentation(self._to_run_config(request), progress=lambda event: self._on_progress(job_id, event))
@@ -131,6 +138,8 @@ class JobManager:
         )
 
     def _on_progress(self, job_id: str, event: dict[str, object]) -> None:
+        # Progress events are emitted from the service layer at key milestones such as
+        # source resolution, per-video processing, upload, and variant completion.
         updates: dict[str, Any] = {}
         message = event.get("message")
         if isinstance(message, str):
@@ -160,6 +169,8 @@ class JobManager:
         output_dir = event.get("output_dir")
         variant_results = event.get("variant_results")
         if visualizer_url or output_dir or isinstance(variant_results, list):
+            # The result payload is assembled incrementally so the UI can expose links and
+            # output locations before the job reaches its final terminal state.
             existing = self.get_job(job_id)
             result = {} if existing is None or existing["result"] is None else dict(existing["result"])
             if isinstance(visualizer_url, str):
@@ -176,6 +187,7 @@ class JobManager:
             job = self._jobs[job_id]
             message = updates.get("message")
             if isinstance(message, str):
+                # Keep a rolling log so long runs stay inspectable without unbounded growth.
                 job.logs.append(f"[{_timestamp()}] {message}")
                 job.logs = job.logs[-250:]
             for key, value in updates.items():
@@ -183,6 +195,7 @@ class JobManager:
 
     @staticmethod
     def _to_run_config(request: RunCreateRequest) -> RunConfig:
+        # Convert the API model into the service-layer config object shared with the CLI.
         output_dir = Path(request.output_dir) if request.output_dir else None
         return RunConfig(
             source=request.source,
@@ -205,6 +218,9 @@ class JobManager:
 
 
 def create_app() -> FastAPI:
+    # The backend serves two roles:
+    # 1. JSON API for the Svelte UI
+    # 2. Static hosting for the built frontend when `frontend/dist` exists
     app = FastAPI(title="Qualia LeRobot Augmentor UI API")
     app.add_middleware(
         CORSMiddleware,
@@ -222,6 +238,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/options")
     def options() -> dict[str, Any]:
+        # Frontend bootstrapping endpoint: presets, recipes, and default form values.
         return {
             "presets": ["mild", "medium", "strong"],
             "recipes": [recipe.to_dict() for recipe in list_recipes()],
@@ -246,6 +263,7 @@ def create_app() -> FastAPI:
 
     frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if frontend_dist.exists():
+        # Production-style local setup: the Python backend serves the compiled frontend bundle.
         app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
 
     return app
@@ -255,10 +273,12 @@ app = create_app()
 
 
 def main() -> None:
+    # CLI entrypoint for `qualia-augment-web`.
     uvicorn.run("qualia_lerobot_augmentor.api:app", host="127.0.0.1", port=8000, reload=False)
 
 
 def _serialize_result(result: RunResult) -> dict[str, Any]:
+    # Convert rich Python result objects into plain JSON-friendly structures for the UI.
     return {
         "output_dir": str(result.output_dir) if result.output_dir is not None else None,
         "resolved_repo_id": result.resolved_repo_id,

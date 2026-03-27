@@ -8,6 +8,8 @@ from qualia_lerobot_augmentor.service import RunConfig, default_output_dir as _d
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # The CLI is intentionally thin: it collects flags, builds a shared RunConfig,
+    # and delegates the actual work to the service layer.
     parser = argparse.ArgumentParser(
         prog="qualia-augment",
         description=(
@@ -97,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        # Reuse the same orchestration path as the web app so behavior stays consistent.
         result = run_augmentation(
             RunConfig(
                 source=args.source,
@@ -130,6 +133,7 @@ def default_output_dir(source_or_repo_id: str) -> Path:
 
 
 def _cli_progress(event: dict[str, object]) -> None:
+    # Surface service-layer progress in a terminal-friendly way.
     message = event.get("message")
     if not isinstance(message, str):
         return
