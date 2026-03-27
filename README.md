@@ -2,6 +2,8 @@
 
 Local tooling for augmenting a LeRobot v3 dataset, publishing the result to Hugging Face Hub, and opening the dataset in the LeRobot visualizer.
 
+![Qualia LeRobot Augmentor UI](./Screenshot-of-%20application.png)
+
 This project includes:
 
 - a Python CLI for dataset augmentation
@@ -132,7 +134,10 @@ Then open:
 ```text
 http://127.0.0.1:8000
 ```
-
+You can test the status of the Backend by
+```text
+http://127.0.0.1:8000/api/health
+```
 ### 2. Build the frontend
 
 ```powershell
