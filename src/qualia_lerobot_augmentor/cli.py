@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -65,9 +66,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--video-codec",
-        default="mp4v",
+        default="avc1",
         choices=("mp4v", "avc1"),
-        help="Codec used when writing augmented MP4 shards. `mp4v` is the safest default on Windows.",
+        help=(
+            "Codec used when writing augmented MP4 shards. `avc1` is recommended for browser "
+            "playback in the LeRobot visualizer; `mp4v` is a local-only fallback when H.264 "
+            "encoding is unavailable."
+        ),
+    )
+    parser.add_argument(
+        "--max-videos",
+        type=int,
+        help="Limit augmentation to the first N discovered MP4 video shards. Useful for quick smoke tests.",
     )
     parser.add_argument(
         "--cache-dir",
@@ -119,6 +129,14 @@ def main(argv: list[str] | None = None) -> int:
             "Upload requires either --output-repo-id or --output-dataset-name "
             "(optionally with --namespace)."
         )
+    if not args.skip_upload and args.video_codec == "mp4v":
+        print(
+            "Warning: codec 'mp4v' often does not play in browser-based viewers such as the "
+            "LeRobot visualizer. Prefer '--video-codec avc1' for uploaded datasets.",
+            file=sys.stderr,
+        )
+    if args.max_videos is not None and args.max_videos < 1:
+        parser.error("--max-videos must be at least 1.")
 
     preset = get_preset(args.preset)
     source = resolve_source(args.source, cache_dir=args.cache_dir, token=token)
@@ -132,6 +150,9 @@ def main(argv: list[str] | None = None) -> int:
     video_files = discover_video_files(output_dir)
     if not video_files:
         raise RuntimeError(f"No MP4 files were found under {output_dir / 'videos'}")
+    if args.max_videos is not None:
+        video_files = video_files[: args.max_videos]
+        print(f"Limiting augmentation to {len(video_files)} video file(s) due to --max-videos={args.max_videos}.")
 
     summaries = []
     print(f"Cloned dataset into: {output_dir}")

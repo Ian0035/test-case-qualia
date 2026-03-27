@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import random
+import shutil
+import subprocess
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -29,6 +31,41 @@ class VideoProcessingSummary:
     height: int
     fps: float
     transform: dict[str, float | int]
+
+
+class _FFmpegWriter:
+    def __init__(self, temp_path: Path, fps: float, width: int, height: int, ffmpeg_exe: str) -> None:
+        self.temp_path = temp_path
+        self.process = subprocess.Popen(
+            _build_ffmpeg_command(
+                ffmpeg_exe=ffmpeg_exe,
+                temp_path=temp_path,
+                fps=fps,
+                width=width,
+                height=height,
+            ),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+    def write(self, frame) -> None:
+        if self.process.stdin is None:
+            raise RuntimeError("FFmpeg writer stdin is not available.")
+        self.process.stdin.write(frame.tobytes())
+
+    def release(self) -> None:
+        stderr_output = ""
+        if self.process.stdin is not None:
+            self.process.stdin.close()
+        if self.process.stderr is not None:
+            stderr_output = self.process.stderr.read().decode("utf-8", errors="replace")
+            self.process.stderr.close()
+        return_code = self.process.wait()
+        if return_code != 0:
+            self.temp_path.unlink(missing_ok=True)
+            detail = stderr_output.strip() or f"ffmpeg exited with status {return_code}"
+            raise RuntimeError(f"FFmpeg failed to write H.264 video: {detail}")
 
 
 def _load_video_stack():
@@ -65,7 +102,7 @@ def augment_video_file(
     preset: AugmentationPreset,
     seed: int,
     seed_key: str | None = None,
-    codec: str = "mp4v",
+    codec: str = "avc1",
 ) -> VideoProcessingSummary:
     cv2, np = _load_video_stack()
 
@@ -122,6 +159,17 @@ def augment_video_file(
 
 
 def _open_writer(temp_path: Path, fps: float, width: int, height: int, codec: str):
+    if codec == "avc1":
+        ffmpeg_exe = _find_ffmpeg_executable()
+        if ffmpeg_exe:
+            return _FFmpegWriter(
+                temp_path=temp_path,
+                fps=fps,
+                width=width,
+                height=height,
+                ffmpeg_exe=ffmpeg_exe,
+            )
+
     cv2, _ = _load_video_stack()
     writer = cv2.VideoWriter(
         str(temp_path),
@@ -134,10 +182,59 @@ def _open_writer(temp_path: Path, fps: float, width: int, height: int, codec: st
 
     writer.release()
     temp_path.unlink(missing_ok=True)
+    if codec == "avc1":
+        raise RuntimeError(
+            f"Unable to open an MP4 video writer for {temp_path} with codec 'avc1'. "
+            "The LeRobot visualizer expects browser-playable H.264 video, but this environment "
+            "does not currently have a working H.264 encoder. Install `imageio-ffmpeg` or a "
+            "`ffmpeg` binary with libx264 support, or use '--video-codec mp4v --skip-upload' "
+            "for local-only output."
+        )
     raise RuntimeError(
         f"Unable to open an MP4 video writer for {temp_path} with codec '{codec}'. "
-        "Try --video-codec mp4v on Windows if H.264 is unavailable."
+        "Try '--video-codec avc1' for browser-playable uploads, or '--video-codec mp4v' for local-only output."
     )
+
+
+def _find_ffmpeg_executable() -> str | None:
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        return shutil.which("ffmpeg")
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def _build_ffmpeg_command(
+    ffmpeg_exe: str,
+    temp_path: Path,
+    fps: float,
+    width: int,
+    height: int,
+) -> list[str]:
+    return [
+        ffmpeg_exe,
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "bgr24",
+        "-s:v",
+        f"{width}x{height}",
+        "-r",
+        f"{fps:.6f}",
+        "-i",
+        "-",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(temp_path),
+    ]
 
 
 def _apply_transform(frame, transform: VideoTransform, noise_rng, cv2, np):

@@ -20,7 +20,8 @@ This gives us a useful first augmentation strategy while staying aligned with th
 
 - Python for the core data tooling and CLI
 - `huggingface_hub` for download and upload
-- `opencv-python-headless` and `numpy` for video augmentation
+- `opencv-python-headless` and `numpy` for frame processing
+- `imageio-ffmpeg` for browser-playable H.264 output
 
 That keeps the MVP focused on the part of the Qualia stack that matters most for this task: practical Python data tooling.
 
@@ -68,6 +69,11 @@ qualia-augment lerobot/aloha_static_cups_open --output-dataset-name aloha-static
 ```
 
 Authentication uses `HF_TOKEN` or the token already configured for `huggingface_hub`.
+
+For Hugging Face / browser playback, prefer the default `avc1` codec. The project uses a bundled
+FFmpeg encoder via `imageio-ffmpeg` for H.264 output, which is more reliable on Windows than
+OpenCV's built-in OpenH264 path. `mp4v` is still available for local-only runs via
+`--video-codec mp4v --skip-upload`.
 
 If you prefer, you can still pass the full repo id explicitly:
 

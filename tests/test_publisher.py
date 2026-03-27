@@ -22,7 +22,12 @@ class PublisherTests(unittest.TestCase):
         args = parser.parse_args(["lerobot/aloha_static_cups_open", "--skip-upload"])
         self.assertEqual(args.source, "lerobot/aloha_static_cups_open")
         self.assertTrue(args.skip_upload)
-        self.assertEqual(args.video_codec, "mp4v")
+        self.assertEqual(args.video_codec, "avc1")
+
+    def test_cli_parser_accepts_max_videos(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["lerobot/aloha_static_cups_open", "--max-videos", "1", "--skip-upload"])
+        self.assertEqual(args.max_videos, 1)
 
     def test_default_output_dir_sanitizes_repo_id(self) -> None:
         output_dir = default_output_dir("alice/my-dataset")

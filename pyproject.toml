@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "huggingface_hub>=0.24.0",
+  "imageio-ffmpeg>=0.6.0",
   "numpy>=1.24.0",
   "opencv-python-headless>=4.9.0.80",
 ]
