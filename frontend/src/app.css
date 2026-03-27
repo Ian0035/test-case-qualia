@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #16202d;
+  background:
+    radial-gradient(circle at top left, rgba(244, 162, 97, 0.30), transparent 28%),
+    radial-gradient(circle at 80% 20%, rgba(42, 157, 143, 0.20), transparent 24%),
+    linear-gradient(180deg, #f7f9fc 0%, #eff3f8 100%);
+  font-family: "Segoe UI Variable", "Trebuchet MS", sans-serif;
+}
+
+body {
+  min-height: 100vh;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.glass {
+  backdrop-filter: blur(14px);
+  background: rgba(255, 255, 255, 0.86);
+}

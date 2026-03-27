@@ -19,9 +19,14 @@ dependencies = [
 dev = [
   "pytest>=8.0.0",
 ]
+web = [
+  "fastapi>=0.135.2",
+  "uvicorn>=0.42.0",
+]
 
 [project.scripts]
 qualia-augment = "qualia_lerobot_augmentor.cli:main"
+qualia-augment-web = "qualia_lerobot_augmentor.api:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

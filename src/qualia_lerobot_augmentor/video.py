@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-from qualia_lerobot_augmentor.config import AugmentationPreset
+from qualia_lerobot_augmentor.config import AugmentationPreset, AugmentationRecipe, get_recipe
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,8 +18,10 @@ class VideoTransform:
     hue_shift: int
     gamma: float
     noise_std: float
+    blur_kernel: int
+    jpeg_quality: int | None
 
-    def to_dict(self) -> dict[str, float | int]:
+    def to_dict(self) -> dict[str, float | int | None]:
         return asdict(self)
 
 
@@ -85,21 +87,34 @@ def stable_seed(seed: int, value: str) -> int:
     return int.from_bytes(digest[:8], byteorder="big", signed=False)
 
 
-def sample_transform(preset: AugmentationPreset, seed: int) -> VideoTransform:
+def sample_transform(recipe: AugmentationRecipe, preset: AugmentationPreset, seed: int) -> VideoTransform:
     rng = random.Random(seed)
+    blur_kernel = 0
+    if recipe.blur_probability > 0.0 and rng.random() < recipe.blur_probability:
+        kernels = [value for value in range(recipe.blur_kernel_min, recipe.blur_kernel_max + 1) if value >= 3 and value % 2 == 1]
+        if kernels:
+            blur_kernel = rng.choice(kernels)
+
+    jpeg_quality = None
+    if recipe.compression_probability > 0.0 and rng.random() < recipe.compression_probability:
+        jpeg_quality = rng.randint(recipe.compression_quality_min, recipe.compression_quality_max)
+
     return VideoTransform(
-        brightness=1.0 + rng.uniform(-preset.brightness_jitter, preset.brightness_jitter),
-        contrast=1.0 + rng.uniform(-preset.contrast_jitter, preset.contrast_jitter),
-        saturation=1.0 + rng.uniform(-preset.saturation_jitter, preset.saturation_jitter),
-        hue_shift=rng.randint(-preset.hue_jitter, preset.hue_jitter),
-        gamma=1.0 + rng.uniform(-preset.gamma_jitter, preset.gamma_jitter),
-        noise_std=rng.uniform(0.0, preset.noise_std_max),
+        brightness=_clamp(1.0 + recipe.brightness_bias + rng.uniform(-preset.brightness_jitter, preset.brightness_jitter), 0.45, 1.6),
+        contrast=_clamp(1.0 + recipe.contrast_bias + rng.uniform(-preset.contrast_jitter, preset.contrast_jitter), 0.55, 1.7),
+        saturation=_clamp(1.0 + recipe.saturation_bias + rng.uniform(-preset.saturation_jitter, preset.saturation_jitter), 0.4, 1.8),
+        hue_shift=recipe.hue_bias + rng.randint(-preset.hue_jitter, preset.hue_jitter),
+        gamma=_clamp(1.0 + recipe.gamma_bias + rng.uniform(-preset.gamma_jitter, preset.gamma_jitter), 0.55, 1.8),
+        noise_std=max(0.0, recipe.noise_floor + rng.uniform(0.0, preset.noise_std_max)),
+        blur_kernel=blur_kernel,
+        jpeg_quality=jpeg_quality,
     )
 
 
 def augment_video_file(
     video_path: Path,
     preset: AugmentationPreset,
+    recipe: AugmentationRecipe | None,
     seed: int,
     seed_key: str | None = None,
     codec: str = "avc1",
@@ -108,7 +123,7 @@ def augment_video_file(
 
     file_seed = stable_seed(seed, seed_key or str(video_path))
     noise_rng = np.random.default_rng(file_seed)
-    transform = sample_transform(preset, file_seed)
+    transform = sample_transform(recipe or get_recipe("balanced"), preset, file_seed)
 
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
@@ -258,4 +273,20 @@ def _apply_transform(frame, transform: VideoTransform, noise_rng, cv2, np):
         frame_f32 += noise_rng.normal(0.0, transform.noise_std, frame_f32.shape).astype(np.float32)
 
     frame_f32 = np.clip(frame_f32, 0.0, 1.0)
-    return (frame_f32 * 255.0).astype(np.uint8)
+    frame_u8 = (frame_f32 * 255.0).astype(np.uint8)
+
+    if transform.blur_kernel >= 3:
+        frame_u8 = cv2.GaussianBlur(frame_u8, (transform.blur_kernel, transform.blur_kernel), 0)
+
+    if transform.jpeg_quality is not None:
+        ok, encoded = cv2.imencode(".jpg", frame_u8, [int(cv2.IMWRITE_JPEG_QUALITY), int(transform.jpeg_quality)])
+        if ok:
+            decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+            if decoded is not None:
+                frame_u8 = decoded
+
+    return frame_u8
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))

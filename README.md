@@ -1,112 +1,175 @@
-# test-case-qualia
+# Qualia LeRobot Augmentor
 
-Coding challenge solution scaffold for Qualia: a Python CLI that augments a LeRobot v3 dataset, uploads it to the Hugging Face Hub, and prints the LeRobot visualizer URL.
+Local tooling for augmenting a LeRobot v3 dataset, publishing the result to Hugging Face Hub, and opening the dataset in the LeRobot visualizer.
 
-## Why this approach
+This project includes:
 
-LeRobot v3 is file-based: the tabular data lives in `data/` Parquet shards, while camera frames live in `videos/` MP4 shards and are linked by metadata in `meta/`.
+- a Python CLI for dataset augmentation
+- a FastAPI backend for running jobs locally
+- a Svelte + Tailwind frontend for launching and monitoring runs
 
-That detail matters. Instead of trying to rebuild episode offsets from scratch, this implementation takes the safer route:
+## What It Does
 
-1. Clone the source dataset locally.
-2. Rewrite every MP4 shard under `videos/` with deterministic photometric augmentation.
-3. Keep the existing Parquet shards and metadata structure intact.
-4. Upload the resulting dataset to a new Hugging Face dataset repo.
-5. Print a direct visualizer link.
+The tool works with the actual LeRobot v3 dataset structure:
 
-This gives us a useful first augmentation strategy while staying aligned with the actual LeRobot v3 storage model.
+- episode tables stay in `data/`
+- metadata stays in `meta/`
+- camera video shards stay in `videos/`
 
-## Tech choices
+Instead of rebuilding the whole dataset format, the pipeline:
 
-- Python for the core data tooling and CLI
-- `huggingface_hub` for download and upload
-- `opencv-python-headless` and `numpy` for frame processing
-- `imageio-ffmpeg` for browser-playable H.264 output
+1. Resolves a source dataset from a local path or Hugging Face repo id.
+2. Clones that dataset into a local output folder.
+3. Rewrites MP4 shards under `videos/` with deterministic augmentation.
+4. Writes an augmentation manifest and dataset card.
+5. Uploads the output to Hugging Face Hub.
+6. Produces a direct LeRobot visualizer link.
 
-That keeps the MVP focused on the part of the Qualia stack that matters most for this task: practical Python data tooling.
+That keeps the dataset layout valid while still giving us a practical augmentation workflow.
 
-## Project layout
+## Current Product Shape
 
-```text
-src/qualia_lerobot_augmentor/
-  cli.py           # CLI entrypoint
-  config.py        # augmentation presets
-  source.py        # source resolution, validation, cloning
-  video.py         # MP4 augmentation
-  publisher.py     # Hugging Face upload + visualizer URL
-  dataset_card.py  # output README + manifest generation
-tests/
+Current core features:
+
+- browser-playable H.264 (`avc1`) output by default
+- named augmentation tools:
+  - `balanced`
+  - `low_light`
+  - `warm_shift`
+  - `cool_shift`
+  - `sensor_noise`
+  - `compression`
+- intensity presets:
+  - `mild`
+  - `medium`
+  - `strong`
+- deterministic runs via seed control
+- optional smoke testing with only the first `N` videos
+- automatic Hugging Face upload
+- direct LeRobot visualizer links
+- local web UI with live progress and run history
+
+
+## Requirements
+
+Before setup, make sure you have:
+
+- Python 3.10 or newer
+- Node.js 18 or newer
+- npm
+
+On Windows, verify these work:
+
+```powershell
+python --version
+npm --version
+node --version
 ```
 
-## Install
+If `python` is not found, install Python from python.org and make sure it is added to `PATH`.
 
-```bash
+## Step-By-Step Setup
+
+These steps assume Windows PowerShell from the project root.
+
+### 1. Clone the repo
+
+```powershell
+git clone <your-repo-url>
+cd test-case-qualia
+```
+
+### 2. Create and activate a virtual environment
+
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
-pip install -e .[dev]
+.\.venv\Scripts\Activate.ps1
 ```
 
-## Usage
+### 3. Install Python dependencies
 
-Local-only run:
+Install the backend, CLI, tests, and web dependencies:
 
-```bash
-python -m qualia_lerobot_augmentor lerobot/aloha_static_cups_open --skip-upload
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev,web]"
 ```
 
-Upload to the Hub:
 
-```bash
-python -m qualia_lerobot_augmentor lerobot/aloha_static_cups_open ^
-  --output-dataset-name aloha-static-cups-open-photometric ^
-  --preset medium
+### 4. Configure your Hugging Face token
+
+Uploads require a Hugging Face token with permission to create and upload dataset repos.
+
+The simplest session-only setup is:
+
+```powershell
+$env:HF_TOKEN = "hf_your_token_here"
 ```
 
-Or via the installed CLI:
+Important behavior:
 
-```bash
-qualia-augment lerobot/aloha_static_cups_open --output-dataset-name aloha-static-cups-open-photometric
+- uploads are performed by the Python backend
+- the backend uses the token configured on the machine
+- datasets will publish under the Hugging Face account tied to that token
+
+So if your local backend is using your token, all uploads from the UI will go to your account.
+
+If you only want to test locally and do not want to upload yet, you can use the UI or CLI with upload disabled.
+
+## Build the Project
+
+### 1. Build the Backend
+
+From the repo root:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+qualia-augment-web
 ```
 
-Authentication uses `HF_TOKEN` or the token already configured for `huggingface_hub`.
-
-For Hugging Face / browser playback, prefer the default `avc1` codec. The project uses a bundled
-FFmpeg encoder via `imageio-ffmpeg` for H.264 output, which is more reliable on Windows than
-OpenCV's built-in OpenH264 path. `mp4v` is still available for local-only runs via
-`--video-codec mp4v --skip-upload`.
-
-If you prefer, you can still pass the full repo id explicitly:
-
-```bash
-qualia-augment lerobot/aloha_static_cups_open --output-repo-id your-username/aloha-static-cups-open-photometric
-```
-
-## Output
-
-Each run creates:
-
-- a cloned local dataset under `artifacts/`
-- rewritten video shards under `videos/`
-- `meta/augmentation_manifest.json`
-- a generated dataset card at the root `README.md`
-
-When upload is enabled, the tool prints a URL like:
+Then open:
 
 ```text
-https://huggingface.co/spaces/lerobot/visualize_dataset?path=%2Fyour-username%2Fdataset-name%2Fepisode_0
+http://127.0.0.1:8000
 ```
 
-## Current scope
+### 2. Build the frontend
 
-This first version focuses on a safe, interview-friendly augmentation:
+```powershell
 
-- deterministic photometric jitter per video shard
-- preserved dataset structure
-- automatic Hub publishing
+cd frontend
+npm install
+npm run build
+```
 
-Natural next steps if we want to evolve it into a fuller product:
+Then open:
 
-- multiple augmentation pipelines
-- a backend API around the same core package
-- a Svelte frontend for run configuration and monitoring
-- persisted run history and metadata in Postgres
+```text
+http://127.0.0.1:5173
+```
+
+This is the simplest way to use the app.
+
+## How AI Coding Agents Were Used
+
+This project was built iteratively with heavy AI coding agent support, especially for:
+
+- scaffolding the initial CLI and pipeline structure
+- debugging Windows environment and H.264 encoding issues
+- switching video writing to FFmpeg-based H.264 output
+- adding the FastAPI backend and Svelte frontend
+
+## Current Scope And Next Steps
+
+Current scope:
+
+- one augmentation tool per UI run
+- local in-memory run history
+
+Natural next steps:
+
+- multiple augmentation tools per UI run
+- persist job history
+- host the tool online
+- add richer dataset QA and validation reports
+- increase speed of processing and augmentation
