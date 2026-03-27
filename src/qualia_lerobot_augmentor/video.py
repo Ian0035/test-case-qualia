@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+import hashlib
+import random
+from dataclasses import dataclass, asdict
+from pathlib import Path
+
+from qualia_lerobot_augmentor.config import AugmentationPreset
+
+
+@dataclass(frozen=True, slots=True)
+class VideoTransform:
+    brightness: float
+    contrast: float
+    saturation: float
+    hue_shift: int
+    gamma: float
+    noise_std: float
+
+    def to_dict(self) -> dict[str, float | int]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class VideoProcessingSummary:
+    path: str
+    frame_count: int
+    width: int
+    height: int
+    fps: float
+    transform: dict[str, float | int]
+
+
+def _load_video_stack():
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "Video augmentation requires numpy and opencv-python-headless. "
+            "Install dependencies with `pip install -e .`."
+        ) from exc
+    return cv2, np
+
+
+def stable_seed(seed: int, value: str) -> int:
+    digest = hashlib.sha256(f"{seed}:{value}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=False)
+
+
+def sample_transform(preset: AugmentationPreset, seed: int) -> VideoTransform:
+    rng = random.Random(seed)
+    return VideoTransform(
+        brightness=1.0 + rng.uniform(-preset.brightness_jitter, preset.brightness_jitter),
+        contrast=1.0 + rng.uniform(-preset.contrast_jitter, preset.contrast_jitter),
+        saturation=1.0 + rng.uniform(-preset.saturation_jitter, preset.saturation_jitter),
+        hue_shift=rng.randint(-preset.hue_jitter, preset.hue_jitter),
+        gamma=1.0 + rng.uniform(-preset.gamma_jitter, preset.gamma_jitter),
+        noise_std=rng.uniform(0.0, preset.noise_std_max),
+    )
+
+
+def augment_video_file(
+    video_path: Path,
+    preset: AugmentationPreset,
+    seed: int,
+    seed_key: str | None = None,
+    codec: str = "mp4v",
+) -> VideoProcessingSummary:
+    cv2, np = _load_video_stack()
+
+    file_seed = stable_seed(seed, seed_key or str(video_path))
+    noise_rng = np.random.default_rng(file_seed)
+    transform = sample_transform(preset, file_seed)
+
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        raise RuntimeError(f"Unable to open video for reading: {video_path}")
+
+    fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    if width <= 0 or height <= 0:
+        capture.release()
+        raise RuntimeError(f"Could not determine video dimensions for {video_path}")
+
+    temp_path = video_path.with_suffix(".augmented.tmp.mp4")
+    writer = _open_writer(temp_path, fps=fps, width=width, height=height, codec=codec)
+
+    frame_count = 0
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            augmented = _apply_transform(
+                frame=frame,
+                transform=transform,
+                noise_rng=noise_rng,
+                cv2=cv2,
+                np=np,
+            )
+            writer.write(augmented)
+            frame_count += 1
+    finally:
+        capture.release()
+        writer.release()
+
+    if frame_count == 0:
+        temp_path.unlink(missing_ok=True)
+        raise RuntimeError(f"No frames were read from {video_path}")
+
+    temp_path.replace(video_path)
+    return VideoProcessingSummary(
+        path=str(video_path),
+        frame_count=frame_count,
+        width=width,
+        height=height,
+        fps=fps,
+        transform=transform.to_dict(),
+    )
+
+
+def _open_writer(temp_path: Path, fps: float, width: int, height: int, codec: str):
+    cv2, _ = _load_video_stack()
+    writer = cv2.VideoWriter(
+        str(temp_path),
+        cv2.VideoWriter_fourcc(*codec),
+        fps,
+        (width, height),
+    )
+    if writer.isOpened():
+        return writer
+
+    writer.release()
+    temp_path.unlink(missing_ok=True)
+    raise RuntimeError(
+        f"Unable to open an MP4 video writer for {temp_path} with codec '{codec}'. "
+        "Try --video-codec mp4v on Windows if H.264 is unavailable."
+    )
+
+
+def _apply_transform(frame, transform: VideoTransform, noise_rng, cv2, np):
+    frame_f32 = frame.astype(np.float32) / 255.0
+
+    channel_mean = frame_f32.mean(axis=(0, 1), keepdims=True)
+    frame_f32 = (frame_f32 - channel_mean) * transform.contrast + channel_mean
+    frame_f32 = frame_f32 * transform.brightness
+    frame_f32 = np.clip(frame_f32, 0.0, 1.0)
+
+    hsv = cv2.cvtColor((frame_f32 * 255.0).astype(np.uint8), cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[:, :, 1] *= transform.saturation
+    hsv[:, :, 0] = (hsv[:, :, 0] + transform.hue_shift) % 180.0
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1], 0.0, 255.0)
+    frame_f32 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR).astype(np.float32) / 255.0
+
+    if transform.gamma != 1.0:
+        frame_f32 = np.power(np.clip(frame_f32, 0.0, 1.0), transform.gamma)
+
+    if transform.noise_std > 0.0:
+        frame_f32 += noise_rng.normal(0.0, transform.noise_std, frame_f32.shape).astype(np.float32)
+
+    frame_f32 = np.clip(frame_f32, 0.0, 1.0)
+    return (frame_f32 * 255.0).astype(np.uint8)
